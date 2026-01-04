@@ -209,6 +209,28 @@ df[num_cols] = MinMaxScaler().fit_transform(df[num_cols])
 \textbf{关键发现}：
 Figure 8 的应力方差反映了负载均衡能力。SRAIOT 的方差是三者中最低的，这有力地支持了原文的论点：通过分层树形结构和链路加权，SRAIOT 能比传统平面协议更公平地分配流量负载。
 
+\section{改进方案：应对类别不平衡的优化}
+在复现过程中，我们注意到 NSL-KDD 数据集存在类别不平衡的固有问题：高频攻击样本数量远大于低频攻击样本，导致模型更容易学习高频攻击特征而忽视低频攻击。即便新版数据集尝试通过欠采样（Undersampling）减少高频攻击样本，其实际缓解效果仍需进一步验证。因此，我们在模型层面提出两类改进方向，以提升低频攻击的识别能力。
+
+\subsection{Focal Loss：聚焦难分类样本}
+Focal Loss 在交叉熵损失的基础上引入 $(1 - p_t)^\gamma$ 因子，降低易分类样本的权重，强化对难分类样本（通常是低频攻击）的学习关注度。该方法的目标是在不牺牲整体准确率的前提下，提高对低频攻击的识别率。
+\begin{itemize}
+    \item \textbf{实现位置}：\texttt{ids/models\_improved.py} 中的 \texttt{FocalLoss} 与 \texttt{FocalLossANNClassifier}
+    \item \textbf{训练入口}：\texttt{ids/train\_improved.py}，可通过参数控制启用或关闭
+    \item \textbf{关键参数}：$\alpha$（类别权重）与 $\gamma$（难样本聚焦程度）
+\end{itemize}
+
+\subsection{AdaBoost：迭代提升低频攻击权重}
+AdaBoost 通过在训练迭代中对被误分类样本赋予更高权重，使后续弱分类器更关注难分类样本，从而提升低频攻击的识别效果。在类别不平衡场景下，该机制能有效弥补主流模型对小样本类别的忽视。
+\begin{itemize}
+    \item \textbf{实现位置}：\texttt{ids/models\_improved.py} 中的 \texttt{SRAIOTEnsembleImproved}
+    \item \textbf{训练入口}：\texttt{ids/train\_improved.py}，支持单独启用 AdaBoost
+    \item \textbf{优化重点}：提高低频攻击的召回率（Sensitivity）
+\end{itemize}
+
+\subsection{对比评估建议}
+为公平评估改进效果，应在相同数据划分与随机种子下对比原始模型与改进模型（仅 Focal Loss、仅 AdaBoost、二者组合），并报告准确率（Accuracy）、敏感性（Sensitivity）、特异性（Specificity）、混淆矩阵以及训练时间等指标，以量化低频攻击识别能力的提升幅度。
+
 \section{总结}
 通过对 SRAIOT 的完整复现，可以得出结论：该算法通过“预测驱动聚类”和“集成学习防御”两手抓，在移动物联网环境下具有极强的鲁棒性。虽然复现中的 SVM 子模型由于未进行精细的超参数调优导致性能未完全达标，但整体协议逻辑的有效性已在多维度实验中得到了充分验证。原文通过 20 次重复试验取均值的方法为我们提供了严谨的性能基准。
 

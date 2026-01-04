@@ -23,6 +23,38 @@
 *   `preprocess.py`: 对 NSL-KDD 数据集进行预处理，包括标签二值化、类别特征编码和数值特征归一化。
 *   `models.py`: 定义了集成模型 `SRAIOTEnsemble` 类，实现了 KNN, SVM, ANN 的异构集成及多数投票逻辑。
 *   `train.py`: IDS 模型的训练脚本，执行 95/5 随机划分并保存训练好的模型至 `results/`。
+*   `models_improved.py`: 改进模型实现（Focal Loss 与 AdaBoost），用于缓解类别不平衡带来的识别偏差。
+*   `train_improved.py`: 改进模型训练脚本，支持启用/关闭 Focal Loss 或 AdaBoost。
+
+## 优化思路与实现细节（Focal Loss 与 AdaBoost）
+
+### 问题背景：KDD 数据集的类别不平衡
+KDD 数据集存在一个固有缺陷：网络攻击样本分为**高频攻击**和**低频攻击**，高频攻击样本数量远大于低频攻击样本。常规机器学习方法往往更倾向于学习高频攻击的特征，从而**忽略低频攻击**，导致对低频攻击的识别率较差。新版 KDD 数据集似乎通过**欠采样（Undersampling）**降低了高频攻击样本数量以缓解该问题，但其实际效果仍待进一步验证。无论其效果如何，我们依然可以尝试在模型层面进行优化。
+
+### 优化方案 1：Focal Loss（聚焦难分类样本）
+**思路**：Focal Loss 通过引入 `(1 - p_t)^γ` 因子降低易分类样本的权重，提高难分类样本（常见于低频攻击）的学习关注度，从而提升对低频攻击的识别能力。  
+**实现位置**：
+* `ids/models_improved.py` 中的 `FocalLoss` 与 `FocalLossANNClassifier` 类  
+**训练脚本**：
+* `ids/train_improved.py` 默认启用 Focal Loss  
+**可配置参数**：
+* `--focal_alpha`：类别权重（默认 0.25）
+* `--focal_gamma`：难样本聚焦程度（默认 2.0）
+**使用示例**：
+```bash
+python ids/train_improved.py --use_adaboost False
+```
+
+### 优化方案 2：AdaBoost（迭代提升低频攻击权重）
+**思路**：AdaBoost 会在训练过程中自动增加被误分类样本的权重，促使后续弱分类器更关注这些难分类样本（通常是低频攻击），从而改善识别效果。  
+**实现位置**：
+* `ids/models_improved.py` 中的 `SRAIOTEnsembleImproved` 类  
+**训练脚本**：
+* `ids/train_improved.py` 支持仅启用 AdaBoost  
+**使用示例**：
+```bash
+python ids/train_improved.py --use_focal_loss False
+```
 
 ### 📁 simulation/ (网络仿真模块)
 负责模拟物联网物理环境、节点运动及 SRAIOT 路由协议。
@@ -48,4 +80,3 @@
 ---
 **项目复现人：周睿敏**  
 **日期：2025年12月31日**
-
