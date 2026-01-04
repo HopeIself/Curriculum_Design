@@ -3,6 +3,7 @@
 对比不同配置下的模型性能，重点关注对低频攻击的识别率提升
 """
 
+import argparse
 import pandas as pd
 import numpy as np
 from preprocess import load_combined_data
@@ -85,11 +86,26 @@ def train_and_evaluate_model(model, model_name, X_train, X_test, y_train, y_test
         traceback.print_exc()
         return None
 
+def parse_args():
+    parser = argparse.ArgumentParser(description="SRAIOT模型对比测试")
+    parser.add_argument("--sample-fraction", type=float, default=0.3,
+                        help="使用数据集的比例（0-1），默认0.3以加快对比速度")
+    parser.add_argument("--test-size", type=float, default=0.05,
+                        help="测试集比例，默认0.05")
+    parser.add_argument("--random-state", type=int, default=42,
+                        help="随机种子，默认42")
+    parser.add_argument("--skip-full", action="store_true",
+                        help="跳过Focal Loss + AdaBoost的完整改进配置")
+    return parser.parse_args()
+
+
 def main():
+    args = parse_args()
     print("="*60)
     print("SRAIOT模型对比测试")
     print("对比原始模型和改进模型（Focal Loss + AdaBoost）的效果")
     print("="*60)
+    print(f"运行参数: sample_fraction={args.sample_fraction}, test_size={args.test_size}, random_state={args.random_state}")
     
     # 1. 加载数据（使用固定的随机种子确保公平对比）
     print("\n正在加载数据...")
@@ -97,10 +113,20 @@ def main():
     
     X = df.drop('label', axis=1)
     y = df['label']
+
+    if not 0 < args.sample_fraction <= 1:
+        raise ValueError("sample_fraction 必须在 (0, 1] 之间")
+
+    if args.sample_fraction < 1:
+        print(f"使用数据子集进行快速对比（比例={args.sample_fraction:.2f}）")
+        X, _, y, _ = train_test_split(
+            X, y, test_size=1 - args.sample_fraction,
+            random_state=args.random_state, stratify=y
+        )
     
     # 使用相同的随机种子划分数据
     X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.05, random_state=42
+        X, y, test_size=args.test_size, random_state=args.random_state, stratify=y
     )
     
     print(f"训练集规模: {len(X_train)}")
@@ -190,32 +216,34 @@ def main():
         })
     
     # 5. 训练改进模型 - Focal Loss + AdaBoost
-    print("\n" + "="*60)
-    print("第4组：改进模型 - Focal Loss + AdaBoost (完整改进)")
-    print("="*60)
-    improved_full = SRAIOTEnsembleImproved(
-        use_focal_loss=True,
-        use_adaboost=True,
-        focal_alpha=0.25,
-        focal_gamma=2.0
-    )
-    full_metrics = train_and_evaluate_model(
-        improved_full, "改进模型 (Focal Loss + AdaBoost)",
-        X_train, X_test, y_train, y_test
-    )
-    if full_metrics:
-        results.append({
-            '模型名称': '改进模型 - Focal Loss + AdaBoost',
-            '配置': 'KNN + SVM + ANN(Focal Loss) + AdaBoost',
-            '准确率': full_metrics['accuracy'],
-            '敏感性 (攻击检测率)': full_metrics['sensitivity'],
-            '特异性 (正常识别率)': full_metrics['specificity'],
-            '训练时间(秒)': full_metrics['training_time'],
-            'TP': full_metrics['tp'],
-            'TN': full_metrics['tn'],
-            'FP': full_metrics['fp'],
-            'FN': full_metrics['fn']
-        })
+    full_metrics = None
+    if not args.skip_full:
+        print("\n" + "="*60)
+        print("第4组：改进模型 - Focal Loss + AdaBoost (完整改进)")
+        print("="*60)
+        improved_full = SRAIOTEnsembleImproved(
+            use_focal_loss=True,
+            use_adaboost=True,
+            focal_alpha=0.25,
+            focal_gamma=2.0
+        )
+        full_metrics = train_and_evaluate_model(
+            improved_full, "改进模型 (Focal Loss + AdaBoost)",
+            X_train, X_test, y_train, y_test
+        )
+        if full_metrics:
+            results.append({
+                '模型名称': '改进模型 - Focal Loss + AdaBoost',
+                '配置': 'KNN + SVM + ANN(Focal Loss) + AdaBoost',
+                '准确率': full_metrics['accuracy'],
+                '敏感性 (攻击检测率)': full_metrics['sensitivity'],
+                '特异性 (正常识别率)': full_metrics['specificity'],
+                '训练时间(秒)': full_metrics['training_time'],
+                'TP': full_metrics['tp'],
+                'TN': full_metrics['tn'],
+                'FP': full_metrics['fp'],
+                'FN': full_metrics['fn']
+            })
     
     # 6. 生成对比报告
     if results:
@@ -224,6 +252,11 @@ def main():
         print("="*60)
         
         results_df = pd.DataFrame(results)
+
+        if original_metrics:
+            results_df['敏感性提升(%)'] = (results_df['敏感性 (攻击检测率)'] - original_metrics['sensitivity']) * 100
+            results_df['准确率提升(%)'] = (results_df['准确率'] - original_metrics['accuracy']) * 100
+            results_df['特异性提升(%)'] = (results_df['特异性 (正常识别率)'] - original_metrics['specificity']) * 100
         
         # 格式化输出
         pd.set_option('display.max_columns', None)
@@ -287,6 +320,13 @@ def main():
                 print(f"完整改进模型敏感性: {full_metrics['sensitivity']:.4f}")
                 improvement = (full_metrics['sensitivity'] - original_metrics['sensitivity']) * 100
                 print(f"提升幅度: {improvement:+.4f}%")
+
+            best_row = results_df.loc[results_df['敏感性 (攻击检测率)'].idxmax()]
+            print("\n最佳敏感性模型:")
+            print(f"  模型: {best_row['模型名称']}")
+            print(f"  敏感性: {best_row['敏感性 (攻击检测率)']:.4f}")
+            if '敏感性提升(%)' in best_row:
+                print(f"  相对原始模型提升: {best_row['敏感性提升(%)']:+.4f}%")
         
         print("\n测试完成！")
     else:
